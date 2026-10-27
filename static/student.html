@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My Attendance - Student Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/theme3d.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header>
+    <div class="logo">🎓</div>
+    <div>
+      <h1>My <span>Dashboard</span></h1>
+      <p><i class="live"></i> STUDENT PORTAL<span class="cursor">_</span></p>
+    </div>
+    <div class="userbar"><span id="who"></span><button class="btn small" onclick="logout()">LOGOUT</button></div>
+  </header>
+
+  <main>
+    <p class="info-line" id="info"></p>
+
+    <div class="cards">
+      <div class="card c-blue tilt"><span>📈 Overall Attendance</span><b id="k1">0%</b></div>
+      <div class="card c-green tilt"><span>✅ Classes Attended</span><b id="k2">0 / 0</b></div>
+      <div class="card tilt" id="k3card"><span>🎯 Status</span><div class="advice" id="k3"></div></div>
+    </div>
+
+    <div class="grid">
+      <div class="box tilt"><h3>Subject-wise Attendance %</h3><canvas id="barChart"></canvas></div>
+      <div class="box tilt">
+        <h3>3D Pie Chart (drag to rotate)</h3>
+        <select id="pieSel" onchange="pieChanged()"></select>
+        <canvas id="pieCanvas"></canvas>
+        <div class="legend" id="legend"></div>
+      </div>
+    </div>
+
+    <div class="sub-grid" id="subCards"></div>
+
+    <div class="box tilt" style="margin-top:22px">
+      <h3>🧮 Attendance Calculator</h3>
+      <div class="calc-row">
+        <select id="cSub" onchange="runCalc()"></select>
+        <label>Target %</label><input id="cTarget" type="number" min="1" max="100" value="75" oninput="runCalc()">
+      </div>
+      <div class="calc-row">
+        <label>If I attend next</label><input id="cAtt" type="number" min="0" value="0" oninput="runCalc()">
+        <label>and miss next</label><input id="cMiss" type="number" min="0" value="0" oninput="runCalc()">
+        <label>classes</label>
+      </div>
+      <div class="result" id="cOut"></div>
+    </div>
+
+    <div class="box tilt" style="margin-top:22px">
+      <h3>📝 My Marks</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Subject</th><th>Mid 1</th><th>Mid 2</th><th>Internal</th><th>Class Test</th><th>Semester</th></tr></thead>
+          <tbody id="marksBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="box tilt" style="margin-top:22px">
+      <h3>🔒 Change Password</h3>
+      <div class="pw-row">
+        <input id="oldp" type="password" placeholder="Old password">
+        <input id="newp" type="password" placeholder="New password">
+        <button class="btn" onclick="changePw()">CHANGE</button>
+      </div>
+    </div>
+  </main>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="/static/common.js"></script>
+  <script>
+    let D = null, barChart = null, pie = null;
+    const COL = { green: "#00ffa3", yellow: "#ffe45e", red: "#ff4d4d", none: "#7d93ad" };
+
+    Chart.defaults.color = "#7d93ad";
+    Chart.defaults.font.family = "VT323, monospace";
+    Chart.defaults.font.size = 16;
+    Chart.defaults.borderColor = "rgba(0, 229, 255, 0.12)";
+
+    /* ---------- advice text ---------- */
+    function advice(s) {
+      if (!s.total) return "No classes recorded yet.";
+      if (s.status === "red") return "Attend the next " + s.need + " classes in a row to reach " + D.limit + "%.";
+      if (s.can_miss > 0) return "Safe! You can skip " + s.can_miss + " class" + (s.can_miss > 1 ? "es" : "") + " and stay at " + D.limit + "% or above.";
+      return "On the edge. Do not miss the next class!";
+    }
+
+    /* ---------- load ---------- */
+    (async () => {
+      const me = await requireRole("student");
+      document.getElementById("who").textContent = me.name;
+      D = await api("/api/student/me");
+      render();
+    })();
+
+    function render() {
+      const st = D.student, o = D.overall;
+      document.getElementById("info").innerHTML =
+        "<b>" + esc(st.name) + "</b> | Roll No: <b>" + esc(st.roll) + "</b> | Class: <b>" + esc(st.klass) + "</b>";
+
+      const k1 = document.getElementById("k1");
+      k1.textContent = o.percent + "%";
+      k1.style.color = COL[o.status]; k1.style.textShadow = "0 0 16px " + COL[o.status];
+      document.getElementById("k2").textContent = o.present + " / " + o.total;
+      document.getElementById("k3").textContent = advice(o);
+      document.getElementById("k3card").style.borderColor = COL[o.status];
+
+      renderBar();
+      renderCards();
+      fillSelects();
+      initPie(); pieChanged();
+      runCalc();
+      renderMarks();
+    }
+
+    /* ---------- bar chart with 75% line ---------- */
+    function renderBar() {
+      const subs = D.subjects;
+      if (barChart) barChart.destroy();
+      barChart = new Chart(document.getElementById("barChart"), {
+        data: {
+          labels: subs.map(s => s.name),
+          datasets: [
+            { type: "bar", label: "Attendance %", data: subs.map(s => s.percent),
+              backgroundColor: subs.map(s => COL[s.status]), borderColor: "#d8f8ff", borderWidth: 2 },
+            { type: "line", label: D.limit + "% limit", data: subs.map(() => D.limit),
+              borderColor: "#ffe45e", borderDash: [8, 6], pointRadius: 0, borderWidth: 2 }
+          ]
+        },
+        options: {
+          animation: { duration: 1400, easing: "easeOutQuart" },
+          scales: { y: { beginAtZero: true, max: 100 } }
+        }
+      });
+    }
+
+    /* ---------- subject cards ---------- */
+    function renderCards() {
+      const box = document.getElementById("subCards");
+      if (!D.subjects.length) {
+        box.innerHTML = '<div class="box">No subjects are assigned to your class yet. Please contact the admin.</div>';
+        return;
+      }
+      box.innerHTML = D.subjects.map(s => `
+        <div class="box sub-card tilt">
+          <h4>${esc(s.name)}</h4>
+          <div class="pct ${s.status}">${s.percent}%</div>
+          <div class="bar"><i style="width:${s.percent}%;background:${COL[s.status]}"></i></div>
+          <div style="margin-top:8px;color:var(--muted)">${s.present} present / ${s.total} classes</div>
+          <div class="advice">${esc(advice(s))}</div>
+        </div>`).join("");
+    }
+
+    /* ---------- dropdowns ---------- */
+    function fillSelects() {
+      const opts = '<option value="all">Overall (all subjects)</option>' +
+        D.subjects.map(s => `<option value="${esc(s.code)}">${esc(s.name)}</option>`).join("");
+      document.getElementById("pieSel").innerHTML = opts;
+      document.getElementById("cSub").innerHTML = opts;
+    }
+    function pick(code) { return code === "all" ? D.overall : D.subjects.find(s => s.code === code); }
+
+    /* ---------- 3D pie chart (Three.js) ---------- */
+    function initPie() {
+      if (pie || typeof THREE === "undefined") return;
+      try {
+        const canvas = document.getElementById("pieCanvas");
+        const w = canvas.clientWidth, h = 320;
+        const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.setSize(w, h, false);
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 100);
+        camera.position.set(0, 4.2, 8);
+        camera.lookAt(0, 0, 0);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+        const light = new THREE.DirectionalLight(0xffffff, 0.9);
+        light.position.set(4, 8, 6);
+        scene.add(light);
+        const spin = new THREE.Group();
+        scene.add(spin);
+        pie = { renderer, scene, camera, spin, drag: false, lastX: 0 };
+
+        canvas.addEventListener("pointerdown", e => { pie.drag = true; pie.lastX = e.clientX; });
+        window.addEventListener("pointerup", () => { pie.drag = false; });
+        window.addEventListener("pointermove", e => {
+          if (!pie.drag) return;
+          spin.rotation.y += (e.clientX - pie.lastX) * 0.01;
+          pie.lastX = e.clientX;
+        });
+        (function loop() {
+          if (!pie.drag) spin.rotation.y += 0.006;
+          renderer.render(scene, camera);
+          requestAnimationFrame(loop);
+        })();
+      } catch (e) { console.log("3D pie not available:", e); pie = null; }
+    }
+
+    function pieChanged() {
+      const s = pick(document.getElementById("pieSel").value);
+      const present = s.present, absent = s.total - s.present;
+      document.getElementById("legend").innerHTML = s.total
+        ? `<span><i style="background:#00ffa3"></i>Present: ${present}</span><span><i style="background:#ff4d4d"></i>Absent: ${absent}</span>`
+        : "No classes recorded yet.";
+      if (!pie) return;
+      [...pie.spin.children].forEach(m => { pie.spin.remove(m); m.geometry.dispose(); m.material.dispose(); });
+      const total = present + absent;
+      if (!total) return;
+      let start = 0;
+      [[present, 0x00ffa3], [absent, 0xff4d4d]].forEach(([n, col]) => {
+        if (!n) return;
+        const len = 2 * Math.PI * n / total;
+        const mesh = new THREE.Mesh(
+          new THREE.CylinderGeometry(2.6, 2.6, 0.9, 64, 1, false, start, len),
+          new THREE.MeshStandardMaterial({ color: col, roughness: 0.35, metalness: 0.3, emissive: col, emissiveIntensity: 0.18 })
+        );
+        const mid = start + len / 2, off = n === total ? 0 : 0.25;
+        mesh.position.set(Math.sin(mid) * off, 0, Math.cos(mid) * off);
+        pie.spin.add(mesh);
+        start += len;
+      });
+    }
+
+    /* ---------- advanced calculator ---------- */
+    function runCalc() {
+      const s = pick(document.getElementById("cSub").value);
+      const X = Math.min(100, Math.max(1, parseInt(document.getElementById("cTarget").value) || D.limit));
+      const a = Math.max(0, parseInt(document.getElementById("cAtt").value) || 0);
+      const m = Math.max(0, parseInt(document.getElementById("cMiss").value) || 0);
+      const T = s.total, P = s.present, out = document.getElementById("cOut");
+      if (!T) { out.innerHTML = "No classes recorded yet for this selection."; return; }
+
+      const pct = P * 100 / T;
+      let line;
+      if (P * 100 >= X * T) {
+        const canMiss = X >= 100 ? 0 : Math.floor((100 * P - X * T) / X);
+        line = `<span class="green">You are above ${X}%.</span> You can skip <b>${canMiss}</b> class${canMiss === 1 ? "" : "es"} and still stay at ${X}% or above.`;
+      } else if (X >= 100) {
+        line = `<span class="red">100% is not possible any more</span> because you already missed a class.`;
+      } else {
+        const need = Math.ceil((X * T - 100 * P) / (100 - X));
+        line = `<span class="red">You are below ${X}%.</span> Attend the next <b>${need}</b> classes in a row to reach ${X}%.`;
+      }
+      const nT = T + a + m, nP = P + a, np = nP * 100 / nT;
+      const cls = nP * 100 >= X * nT ? "green" : "red";
+      out.innerHTML =
+        `<div>Now: <b>${P}/${T}</b> = <b>${pct.toFixed(1)}%</b></div><div>${line}</div>` +
+        ((a || m) ? `<div>After attending ${a} and missing ${m}: <b class="${cls}">${np.toFixed(1)}%</b> (${nP}/${nT})</div>` : "");
+    }
+
+    /* ---------- marks table ---------- */
+    function renderMarks() {
+      const f = ["mid1", "mid2", "internal", "test", "sem"];
+      document.getElementById("marksBody").innerHTML = D.subjects.length
+        ? D.subjects.map(s => "<tr><td>" + esc(s.name) + "</td>" +
+            f.map(k => "<td>" + (s.marks[k] !== undefined ? s.marks[k] + " / " + D.max[k] : "-") + "</td>").join("") +
+          "</tr>").join("")
+        : '<tr><td colspan="6">No subjects yet</td></tr>';
+    }
+
+    /* ---------- change password ---------- */
+    async function changePw() {
+      try {
+        await api("/api/password", "POST", {
+          old: document.getElementById("oldp").value,
+          new: document.getElementById("newp").value
+        });
+        toast("PASSWORD CHANGED");
+        document.getElementById("oldp").value = document.getElementById("newp").value = "";
+      } catch (e) { toast(e.message.toUpperCase(), false); }
+    }
+  </script>
+</body>
+</html>

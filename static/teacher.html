@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Teacher - Student Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/theme3d.css">
+</head>
+<body>
+  <header>
+    <div class="logo">📚</div>
+    <div>
+      <h1>Teacher <span>Panel</span></h1>
+      <p><i class="live"></i> ATTENDANCE &amp; MARKS<span class="cursor">_</span></p>
+    </div>
+    <div class="userbar"><a href="/admin" id="back" class="hide"><button class="btn small">ADMIN</button></a><span id="who"></span><button class="btn small" onclick="logout()">LOGOUT</button></div>
+  </header>
+
+  <main>
+    <div class="top-row">
+      <label>Subject</label>
+      <select id="sub" onchange="load()"></select>
+      <span id="klass" style="color:var(--cyan)"></span>
+    </div>
+    <div id="empty" class="box hide">No subject is assigned to you yet. Please ask the admin to assign one.</div>
+
+    <div id="content" class="hide">
+      <div class="cards">
+        <div class="card c-red tilt"><span>🔴 Below 75%</span><b id="nRed">0</b></div>
+        <div class="card tilt" style="border-color:var(--yellow)"><span>🟡 Borderline (75-80%)</span><b id="nYel" style="color:var(--yellow);text-shadow:0 0 16px var(--yellow)">0</b></div>
+        <div class="card c-green tilt"><span>🟢 Safe (above 80%)</span><b id="nGrn">0</b></div>
+      </div>
+
+      <div class="tabs">
+        <button class="on" onclick="tab('att', this)">✅ Attendance</button>
+        <button onclick="tab('mk', this)">📝 Marks</button>
+        <button onclick="tab('pw', this)">🔒 Password</button>
+      </div>
+
+      <!-- ATTENDANCE -->
+      <section id="att" class="box">
+        <h3>Mark Attendance</h3>
+        <div class="top-row">
+          <label>Date</label><input id="date" type="date" onchange="load()">
+          <button class="btn small" onclick="setAll(true)">ALL PRESENT</button>
+          <button class="btn small del" onclick="setAll(false)">ALL ABSENT</button>
+        </div>
+        <div class="key">
+          <span><i style="background:var(--red)"></i>Below 75%</span>
+          <span><i style="background:var(--yellow)"></i>Borderline</span>
+          <span><i style="background:var(--green)"></i>Safe</span>
+          <span><i style="background:var(--muted)"></i>No classes yet</span>
+        </div>
+        <div id="notice" class="notice hide">Attendance for this date is already saved. Saving again will update it.</div>
+        <div class="alist" id="alist"></div>
+        <button class="btn" onclick="saveAtt()">💾 SAVE ATTENDANCE</button>
+      </section>
+
+      <!-- MARKS -->
+      <section id="mk" class="box hide">
+        <h3>Enter Marks</h3>
+        <div class="table-wrap">
+          <table>
+            <thead id="mHead"></thead>
+            <tbody id="mBody"></tbody>
+          </table>
+        </div>
+        <div style="margin-top:16px"><button class="btn" onclick="saveAllMarks()">💾 SAVE ALL MARKS</button></div>
+      </section>
+
+      <!-- PASSWORD -->
+      <section id="pw" class="box hide">
+        <h3>Change Password</h3>
+        <div class="pw-row">
+          <input id="oldp" type="password" placeholder="Old password">
+          <input id="newp" type="password" placeholder="New password">
+          <button class="btn" onclick="changePw()">CHANGE</button>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="/static/common.js"></script>
+  <script>
+    let S = null;
+    const FIELDS = [["mid1", "Mid 1"], ["mid2", "Mid 2"], ["internal", "Internal"], ["test", "Class Test"], ["sem", "Semester"]];
+
+    function today() {
+      const t = new Date();
+      return t.getFullYear() + "-" + String(t.getMonth() + 1).padStart(2, "0") + "-" + String(t.getDate()).padStart(2, "0");
+    }
+
+    (async () => {
+      const me = await requireRole("teacher", "admin");
+      document.getElementById("who").textContent = me.name; if (me.role === "admin") document.getElementById("back").classList.remove("hide");
+      document.getElementById("date").value = today();
+      const subs = await api("/api/subjects");
+      if (!subs.length) { document.getElementById("empty").classList.remove("hide"); return; }
+      document.getElementById("sub").innerHTML =
+        subs.map(s => `<option value="${esc(s.code)}">${esc(s.name)} (${esc(s.klass)})</option>`).join("");
+      document.getElementById("content").classList.remove("hide");
+      load();
+    })();
+
+    function tab(id, btn) {
+      ["att", "mk", "pw"].forEach(x => document.getElementById(x).classList.toggle("hide", x !== id));
+      document.querySelectorAll(".tabs button").forEach(b => b.classList.remove("on"));
+      btn.classList.add("on");
+    }
+
+    async function load() {
+      const code = document.getElementById("sub").value;
+      const day = document.getElementById("date").value;
+      S = await api("/api/subjects/" + encodeURIComponent(code) + "/students?date=" + day);
+      render();
+    }
+
+    function render() {
+      document.getElementById("klass").textContent = "Class: " + S.subject.klass + " | " + S.students.length + " students";
+      const c = { red: 0, yellow: 0, green: 0 };
+      S.students.forEach(s => { if (c[s.status] !== undefined) c[s.status]++; });
+      document.getElementById("nRed").textContent = c.red;
+      document.getElementById("nYel").textContent = c.yellow;
+      document.getElementById("nGrn").textContent = c.green;
+      document.getElementById("notice").classList.toggle("hide", !S.marked);
+
+      document.getElementById("alist").innerHTML = S.students.length
+        ? S.students.map(s => `
+            <label class="arow ${s.status}">
+              <input type="checkbox" data-roll="${esc(s.roll)}" ${s.today === false ? "" : "checked"}>
+              <span class="nm">${esc(s.roll)} - ${esc(s.name)}</span>
+              <span class="pc">${s.total ? s.percent + "% (" + s.present + "/" + s.total + ")" : "new"}</span>
+              <span class="st"></span>
+            </label>`).join("")
+        : '<div style="color:var(--muted)">No students in this class yet. Ask the admin to add students.</div>';
+
+      document.getElementById("mHead").innerHTML =
+        "<tr><th>Roll</th><th>Name</th>" + FIELDS.map(f => `<th>${f[1]} (/${S.max[f[0]]})</th>`).join("") + "<th></th></tr>";
+      document.getElementById("mBody").innerHTML = S.students.map(s => `
+        <tr data-roll="${esc(s.roll)}">
+          <td>${esc(s.roll)}</td><td>${esc(s.name)}</td>
+          ${FIELDS.map(f => `<td><input class="mk" type="number" step="0.5" min="0" max="${S.max[f[0]]}" data-f="${f[0]}" value="${s.marks[f[0]] ?? ""}"></td>`).join("")}
+          <td><button class="btn" onclick="saveRow('${esc(s.roll)}')">SAVE</button></td>
+        </tr>`).join("");
+    }
+
+    function setAll(v) { document.querySelectorAll("#alist input").forEach(c => (c.checked = v)); }
+
+    async function saveAtt() {
+      const status = {};
+      document.querySelectorAll("#alist input").forEach(c => (status[c.dataset.roll] = c.checked));
+      if (!Object.keys(status).length) { toast("NO STUDENTS TO MARK", false); return; }
+      try {
+        await api("/api/subjects/" + encodeURIComponent(S.subject.code) + "/attendance", "POST",
+          { date: document.getElementById("date").value, status });
+        toast("ATTENDANCE SAVED");
+        load();
+      } catch (e) { toast(e.message.toUpperCase(), false); }
+    }
+
+    function rowMarks(tr) {
+      const m = {};
+      tr.querySelectorAll("input").forEach(i => (m[i.dataset.f] = i.value));
+      return m;
+    }
+
+    async function saveRow(roll) {
+      const tr = [...document.querySelectorAll("#mBody tr")].find(r => r.dataset.roll === roll);
+      try {
+        await api("/api/subjects/" + encodeURIComponent(S.subject.code) + "/marks", "POST", { roll, marks: rowMarks(tr) });
+        toast("MARKS SAVED: " + roll);
+      } catch (e) { toast(roll + ": " + e.message.toUpperCase(), false); }
+    }
+
+    async function saveAllMarks() {
+      let n = 0;
+      for (const tr of document.querySelectorAll("#mBody tr")) {
+        try {
+          await api("/api/subjects/" + encodeURIComponent(S.subject.code) + "/marks", "POST",
+            { roll: tr.dataset.roll, marks: rowMarks(tr) });
+          n++;
+        } catch (e) { toast(tr.dataset.roll + ": " + e.message.toUpperCase(), false); return; }
+      }
+      toast("MARKS SAVED FOR " + n + " STUDENTS");
+    }
+
+    async function changePw() {
+      try {
+        await api("/api/password", "POST", {
+          old: document.getElementById("oldp").value,
+          new: document.getElementById("newp").value
+        });
+        toast("PASSWORD CHANGED");
+        document.getElementById("oldp").value = document.getElementById("newp").value = "";
+      } catch (e) { toast(e.message.toUpperCase(), false); }
+    }
+  </script>
+</body>
+</html>

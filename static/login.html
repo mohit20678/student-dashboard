@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Login - Student Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/theme3d.css">
+</head>
+<body>
+  <header>
+    <div class="logo">🎓</div>
+    <div>
+      <h1>Student <span>Dashboard</span></h1>
+      <p><i class="live"></i> ATTENDANCE &amp; MARKS PORTAL<span class="cursor">_</span></p>
+    </div>
+  </header>
+
+  <div class="login-wrap">
+    <div class="box login-card tilt">
+      <h2>&gt; Login</h2>
+
+      <div class="roles">
+        <button class="on" onclick="pick('student', this)">🎓 Student</button>
+        <button onclick="pick('teacher', this)">📚 Teacher</button>
+        <button onclick="pick('admin', this)">🛡️ Admin</button>
+      </div>
+
+      <label class="field" id="uLabel">Roll No</label>
+      <input id="u" placeholder="e.g. 22CS001" autocomplete="username">
+
+      <label class="field">Password</label>
+      <input id="p" type="password" placeholder="••••••" autocomplete="current-password">
+
+      <div class="msg" id="msg"></div>
+      <button class="btn" onclick="doLogin()">LOGIN &gt;</button>
+
+      <div class="hint" id="hint">First login: your password is the same as your roll no. Change it after logging in.</div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="/static/common.js"></script>
+  <script>
+    let role = "student";
+    const texts = {
+      student: ["Roll No", "e.g. 22CS001", "First login: your password is the same as your roll no. Change it after logging in."],
+      teacher: ["Username", "your teacher username", "Your username and first password are given by the admin."],
+      admin:   ["Username", "admin", "Only the college admin can use this."]
+    };
+
+    function pick(r, btn) {
+      role = r;
+      document.querySelectorAll(".roles button").forEach(b => b.classList.remove("on"));
+      btn.classList.add("on");
+      document.getElementById("uLabel").textContent = texts[r][0];
+      document.getElementById("u").placeholder = texts[r][1];
+      document.getElementById("hint").textContent = texts[r][2];
+      document.getElementById("msg").textContent = "";
+    }
+
+    async function doLogin() {
+      const msg = document.getElementById("msg");
+      const username = document.getElementById("u").value.trim();
+      const password = document.getElementById("p").value;
+      if (!username || !password) { msg.textContent = "> Enter username and password"; return; }
+
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json();
+      if (!res.ok) { msg.textContent = "> " + data.error; return; }
+
+      if (data.role !== role) {
+        await fetch("/api/logout", { method: "POST" });
+        msg.textContent = "> This is a " + data.role + " account. Choose the " + data.role + " tab.";
+        return;
+      }
+      location.href = "/" + data.role;
+    }
+
+    document.addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });
+  </script>
+</body>
+</html>
