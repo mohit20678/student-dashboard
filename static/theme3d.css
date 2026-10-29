@@ -150,3 +150,10 @@ textarea:focus { border-color: var(--cyan); box-shadow: 0 0 14px var(--cyan); }
 .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; margin-top: 20px; }
 .sep { margin: 22px 0 8px; color: var(--cyan); font-family: var(--pixel); font-size: 10px; }
 .note { color: var(--muted); margin: 6px 0 12px; line-height: 1.25; }
+
+/* ---------- marks analysis ---------- */
+.rank1 td { color: var(--yellow); }
+.rank2 td { color: #d8f8ff; }
+.rank3 td { color: #d9a066; }
+.same-row { padding: 8px 0; border-bottom: 2px dashed rgba(125, 147, 173, 0.25); }
+.same-row b { color: var(--yellow); font-family: var(--pixel); font-size: 11px; margin-right: 8px; }

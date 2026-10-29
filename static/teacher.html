@@ -36,6 +36,7 @@
       <div class="tabs">
         <button class="on" onclick="tab('att', this)">✅ Attendance</button>
         <button onclick="tab('mk', this)">📝 Marks</button>
+        <button onclick="tab('an', this); loadAnalysis()">📈 Analysis</button>
         <button onclick="tab('pw', this)">🔒 Password</button>
       </div>
 
@@ -68,6 +69,13 @@
           </table>
         </div>
         <div style="margin-top:16px"><button class="btn" onclick="saveAllMarks()">💾 SAVE ALL MARKS</button></div>
+      </section>
+
+      <!-- ANALYSIS -->
+      <section id="an" class="box hide">
+        <h3>Marks Analysis &amp; Merit List</h3>
+        <div class="top-row"><label>Show</label><select id="anField" onchange="loadAnalysis()"><option value="total">Total marks</option><option value="mid1">Mid 1</option><option value="mid2">Mid 2</option><option value="internal">Internal</option><option value="test">Class Test</option><option value="sem">Semester</option></select></div>
+        <div id="anBox"></div>
       </section>
 
       <!-- PASSWORD -->
@@ -106,7 +114,7 @@
     })();
 
     function tab(id, btn) {
-      ["att", "mk", "pw"].forEach(x => document.getElementById(x).classList.toggle("hide", x !== id));
+      ["att", "mk", "an", "pw"].forEach(x => document.getElementById(x).classList.toggle("hide", x !== id));
       document.querySelectorAll(".tabs button").forEach(b => b.classList.remove("on"));
       btn.classList.add("on");
     }
@@ -185,6 +193,15 @@
         } catch (e) { toast(tr.dataset.roll + ": " + e.message.toUpperCase(), false); return; }
       }
       toast("MARKS SAVED FOR " + n + " STUDENTS");
+    }
+
+    async function loadAnalysis() {
+      const code = document.getElementById("sub").value;
+      const f = document.getElementById("anField").value;
+      try {
+        const a = await api("/api/subjects/" + encodeURIComponent(code) + "/analysis?field=" + f);
+        document.getElementById("anBox").innerHTML = analysisHTML(a);
+      } catch (e) { toast(e.message.toUpperCase(), false); }
     }
 
     async function changePw() {

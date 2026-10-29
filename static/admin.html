@@ -29,6 +29,7 @@
       <button onclick="tab('st', this)">👥 Students</button>
       <button onclick="tab('te', this)">📚 Teachers</button>
       <button onclick="tab('su', this)">📖 Subjects</button>
+      <button onclick="tab('me', this); meOpen()">🏆 Merit List</button>
       <button onclick="tab('pw', this)">🔒 Password</button>
     </div>
 
@@ -147,6 +148,17 @@
       </div>
     </section>
 
+    <!-- ================= MERIT ================= -->
+    <section id="me" class="box hide">
+      <h3>Marks Analysis &amp; Merit List</h3>
+      <div class="top-row">
+        <label>Class</label><select id="meClass" onchange="meFillSubjects(); loadMerit()"></select>
+        <label>Subject</label><select id="meSub" onchange="loadMerit()"></select>
+        <label>Show</label><select id="meField" onchange="loadMerit()"><option value="total">Total marks</option><option value="mid1">Mid 1</option><option value="mid2">Mid 2</option><option value="internal">Internal</option><option value="test">Class Test</option><option value="sem">Semester</option></select>
+      </div>
+      <div id="meBox"></div>
+    </section>
+
     <!-- ================= PASSWORD ================= -->
     <section id="pw" class="box hide">
       <h3>Change Admin Password</h3>
@@ -199,7 +211,7 @@
     }
 
     function tab(id, btn) {
-      ["ov", "st", "te", "su", "pw"].forEach(x => document.getElementById(x).classList.toggle("hide", x !== id));
+      ["ov", "st", "te", "su", "me", "pw"].forEach(x => document.getElementById(x).classList.toggle("hide", x !== id));
       document.querySelectorAll(".tabs button").forEach(b => b.classList.remove("on"));
       btn.classList.add("on");
     }
@@ -367,6 +379,33 @@
       if (await run(() => api("/api/admin/subjects", "POST",
         { code: val("uCode"), name: val("uName"), klass: val("uClass"), teacher: document.getElementById("suTeacher").value }), "SUBJECT ADDED"))
         clear("uCode", "uName");
+    }
+
+    function meFillSubjects() {
+      const k = document.getElementById("meClass").value;
+      document.getElementById("meSub").innerHTML = '<option value="">All subjects (combined)</option>' +
+        AD.subjects.filter(s => s.klass === k).map(s => `<option value="${q(s.code)}">${esc(s.name)}</option>`).join("");
+    }
+
+    function meOpen() {
+      const el = document.getElementById("meClass"), v = el.value, cl = classes();
+      el.innerHTML = cl.map(c => `<option value="${q(c)}">${esc(c)}</option>`).join("");
+      if (cl.includes(v)) el.value = v;
+      meFillSubjects();
+      loadMerit();
+    }
+
+    async function loadMerit() {
+      const k = document.getElementById("meClass").value;
+      const code = document.getElementById("meSub").value;
+      const f = document.getElementById("meField").value;
+      const box = document.getElementById("meBox");
+      if (!k) { box.innerHTML = '<div class="note">Add students and subjects first.</div>'; return; }
+      const url = code
+        ? "/api/subjects/" + encodeURIComponent(code) + "/analysis?field=" + f
+        : "/api/admin/merit?klass=" + encodeURIComponent(k) + "&field=" + f;
+      try { box.innerHTML = analysisHTML(await api(url)); }
+      catch (e) { toast(e.message.toUpperCase(), false); }
     }
 
     async function changePw() {

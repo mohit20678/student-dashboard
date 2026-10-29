@@ -164,3 +164,39 @@ document.addEventListener("mousemove", e => {
 
 addLayers();
 init3D(window.HERO3D === true);
+
+
+/* ---------- marks analysis display (teacher + admin pages) ---------- */
+function analysisHTML(a) {
+  const fmt = v => (Number.isInteger(v) ? v : +v.toFixed(2));
+  const note = a.missing
+    ? '<div class="note">' + a.missing + " student" + (a.missing > 1 ? "s have" : " has") +
+      " no marks yet and " + (a.missing > 1 ? "are" : "is") + " not counted.</div>"
+    : "";
+  if (!a.count) return note + '<div class="note">No marks entered yet for this selection.</div>';
+
+  const lim = a.limit ? " / " + a.limit : "";
+  const names = v => a.ranks.filter(r => r.mark === v).map(r => esc(r.name)).join(", ");
+  const medal = r => (r === 1 ? "🥇 " : r === 2 ? "🥈 " : r === 3 ? "🥉 " : "");
+
+  const rows = a.ranks.map(r =>
+    '<tr class="rank' + r.rank + '"><td>' + medal(r.rank) + r.rank + "</td><td>" + esc(r.roll) +
+    "</td><td>" + esc(r.name) + "</td><td>" + fmt(r.mark) + lim + "</td></tr>").join("");
+
+  const same = a.same.length
+    ? a.same.map(g => '<div class="same-row"><b>' + fmt(g.mark) + lim + "</b> " +
+        g.students.map(n => esc(n)).join(", ") + "</div>").join("")
+    : '<div class="note">No two students have the same marks.</div>';
+
+  return note +
+    '<div class="cards">' +
+    '<div class="card c-green"><span>⬆ Highest</span><b>' + fmt(a.max) + lim + '</b><div class="advice">' + names(a.max) + "</div></div>" +
+    '<div class="card c-red"><span>⬇ Lowest</span><b>' + fmt(a.min) + lim + '</b><div class="advice">' + names(a.min) + "</div></div>" +
+    '<div class="card c-blue"><span>📊 Average</span><b>' + fmt(a.avg) + lim + '</b><div class="advice">of ' + a.count + " students</div></div>" +
+    "</div>" +
+    '<div class="sep">&gt; MERIT LIST</div>' +
+    '<div class="note">Students with equal marks share the same rank (for example 1, 2, 2, 4).</div>' +
+    '<div class="table-wrap"><table><thead><tr><th>Rank</th><th>Roll</th><th>Name</th><th>Marks</th></tr></thead><tbody>' +
+    rows + "</tbody></table></div>" +
+    '<div class="sep">&gt; STUDENTS WITH THE SAME MARKS</div>' + same;
+}

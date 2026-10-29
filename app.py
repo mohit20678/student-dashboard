@@ -272,6 +272,79 @@ def save_marks(code):
 
 
 # --------------------------------------------------------------------- admin
+def analyse(items):
+    """items: list of (roll, name, value). Returns max, min, average, ranks and tied marks."""
+    if not items:
+        return {"count": 0, "ranks": [], "same": []}
+    items = sorted(items, key=lambda x: (-x[2], x[1].lower()))
+    ranks, prev, rank = [], None, 0
+    for i, (roll, name, v) in enumerate(items, 1):
+        if v != prev:
+            rank, prev = i, v
+        ranks.append({"rank": rank, "roll": roll, "name": name, "mark": v})
+    groups = {}
+    for r in ranks:
+        groups.setdefault(r["mark"], []).append(r["name"])
+    vals = [r["mark"] for r in ranks]
+    return {"count": len(vals), "max": max(vals), "min": min(vals),
+            "avg": round(sum(vals) / len(vals), 2), "ranks": ranks,
+            "same": [{"mark": m, "students": n} for m, n in groups.items() if len(n) > 1]}
+
+
+def mark_value(marks, field):
+    """One student's value for a mark type, or None if nothing is entered."""
+    if field == "total":
+        return round(sum(marks.values()), 2) if marks else None
+    return marks.get(field)
+
+
+def pick_field():
+    f = request.args.get("field", "total")
+    return f if (f == "total" or f in MAX) else None
+
+
+@app.route("/api/subjects/<code>/analysis")
+@need("teacher", "admin")
+def subject_analysis(code):
+    d = load()
+    sub = get_subject(d, code)
+    field = pick_field()
+    if not sub or not field:
+        return err("Subject or mark type not found", 404)
+    items, missing = [], 0
+    for st in d["students"]:
+        if st["klass"] != sub["klass"]:
+            continue
+        v = mark_value(d["marks"].get(code + "|" + st["roll"], {}), field)
+        if v is None:
+            missing += 1
+        else:
+            items.append((st["roll"], st["name"], v))
+    return jsonify({**analyse(items), "missing": missing, "field": field, "limit": MAX.get(field)})
+
+
+@app.route("/api/admin/merit")
+@need("admin")
+def admin_merit():
+    d = load()
+    klass = request.args.get("klass", "").strip().upper()
+    field = pick_field()
+    if not klass or not field:
+        return err("Choose a class")
+    codes = [s["code"] for s in d["subjects"] if s["klass"] == klass]
+    items, missing = [], 0
+    for st in d["students"]:
+        if st["klass"] != klass:
+            continue
+        vals = [mark_value(d["marks"].get(c + "|" + st["roll"], {}), field) for c in codes]
+        vals = [v for v in vals if v is not None]
+        if not vals:
+            missing += 1
+        else:
+            items.append((st["roll"], st["name"], round(sum(vals), 2)))
+    return jsonify({**analyse(items), "missing": missing, "field": field, "limit": None})
+
+
 @app.route("/api/admin/data")
 @need("admin")
 def admin_data():
