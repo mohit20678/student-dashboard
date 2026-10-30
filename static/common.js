@@ -5,7 +5,7 @@
 function esc(t) {
   const d = document.createElement("div");
   d.textContent = t == null ? "" : t;
-  return d.innerHTML;
+  return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 function toast(msg, ok = true) {
@@ -41,6 +41,7 @@ async function api(url, method = "GET", body = null) {
 async function requireRole(...roles) {
   const me = await api("/api/me");
   if (!roles.includes(me.role)) { location.href = "/"; throw new Error("wrong role"); }
+  if (me.must_change) await forcePasswordChange();
   return me;
 }
 
@@ -199,4 +200,34 @@ function analysisHTML(a) {
     '<div class="table-wrap"><table><thead><tr><th>Rank</th><th>Roll</th><th>Name</th><th>Marks</th></tr></thead><tbody>' +
     rows + "</tbody></table></div>" +
     '<div class="sep">&gt; STUDENTS WITH THE SAME MARKS</div>' + same;
+}
+
+
+/* ---------- forced password change (first login or after an admin reset) ---------- */
+function forcePasswordChange() {
+  return new Promise(resolve => {
+    const w = document.createElement("div");
+    w.style.cssText = "position:fixed;inset:0;z-index:200;background:rgba(2,6,12,.94);display:grid;place-items:center;padding:20px;overflow:auto";
+    w.innerHTML =
+      '<div class="box login-card"><h2>&gt; Set a new password</h2>' +
+      '<div class="note">For your safety you must choose your own password before continuing.</div>' +
+      '<label class="field">Current password</label><input id="fpOld" type="password" autocomplete="current-password">' +
+      '<label class="field">New password (min 8 characters)</label><input id="fpNew" type="password" autocomplete="new-password">' +
+      '<label class="field">Repeat new password</label><input id="fpNew2" type="password" autocomplete="new-password">' +
+      '<div class="msg" id="fpMsg"></div><button class="btn" id="fpBtn">SAVE PASSWORD &gt;</button></div>';
+    document.body.appendChild(w);
+    const msg = t => (document.getElementById("fpMsg").textContent = "> " + t);
+    async function save() {
+      const o = document.getElementById("fpOld").value, n = document.getElementById("fpNew").value;
+      if (n !== document.getElementById("fpNew2").value) return msg("The two new passwords do not match");
+      try {
+        await api("/api/password", "POST", { old: o, new: n });
+        w.remove();
+        toast("PASSWORD CHANGED");
+        resolve();
+      } catch (e) { msg(e.message); }
+    }
+    document.getElementById("fpBtn").onclick = save;
+    w.addEventListener("keydown", e => { if (e.key === "Enter") save(); });
+  });
 }

@@ -3,8 +3,9 @@ import os
 import re
 import secrets
 import threading
+import time
 import webbrowser
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 
 from flask import Flask, jsonify, request, send_from_directory, session
@@ -27,6 +28,16 @@ if not os.path.exists(KEY):
 with open(KEY) as f:
     app.secret_key = f.read().strip()
 
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=os.environ.get("HTTPS_ONLY") == "1",
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
+)
+
+FAILS = {}  # username -> [wrong attempts, locked until (epoch seconds)]
+MAX_TRIES, LOCK_SECS = 5, 300
+
 
 # ------------------------------------------------------------------ database
 def load():
@@ -39,13 +50,19 @@ def save(d):
         json.dump(d, f, indent=2)
 
 
+def _first_pw():
+    pw = secrets.token_urlsafe(9)
+    print("\n*** FIRST RUN: admin username 'admin', temporary password:", pw, "***\n")
+    return pw
+
+
 def init_db():
     if not os.path.exists(DB):
         save({"users": [], "students": [], "subjects": [], "attendance": [], "marks": {}})
     d = load()
     if not any(u["role"] == "admin" for u in d["users"]):
-        d["users"].append({"username": "admin", "role": "admin", "name": "Administrator",
-                           "password": generate_password_hash("admin123")})
+        d["users"].append({"username": "admin", "role": "admin", "name": "Administrator", "must_change": True,
+                           "password": generate_password_hash(_first_pw())})
         save(d)
 
 
@@ -73,6 +90,23 @@ def need(*roles):
 
 
 # ------------------------------------------------------------ attendance math
+@app.before_request
+def force_password_change():
+    allowed = ("/api/me", "/api/logout", "/api/password", "/api/login")
+    if session.get("must_change") and request.path.startswith("/api/") and request.path not in allowed:
+        return err("You must change your password first", 403)
+
+
+@app.after_request
+def security_headers(resp):
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "same-origin"
+    if request.path.startswith("/api/"):
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
 def metrics(total, present):
     """percent, colour status, classes needed to reach LIMIT, classes that can be missed."""
     if total == 0:
@@ -132,12 +166,24 @@ def page(page):
 @app.route("/api/login", methods=["POST"])
 def login():
     b = request.get_json() or {}
-    u = find_user(load(), b.get("username", ""))
+    name = str(b.get("username", "")).strip().lower()
+    rec = FAILS.get(name, [0, 0])
+    wait = int(rec[1] - time.time())
+    if wait > 0:
+        return err(f"Too many wrong attempts. Try again in {wait // 60 + 1} minute(s).", 429)
+    u = find_user(load(), name)
     if not u or not check_password_hash(u["password"], str(b.get("password", ""))):
+        if len(FAILS) > 5000:
+            FAILS.clear()
+        rec[0] += 1
+        FAILS[name] = [0, time.time() + LOCK_SECS] if rec[0] >= MAX_TRIES else rec
         return err("Wrong username or password", 401)
+    FAILS.pop(name, None)
     session.clear()
-    session.update(username=u["username"], role=u["role"], name=u["name"])
-    return jsonify({"role": u["role"], "name": u["name"]})
+    session.permanent = True
+    session.update(username=u["username"], role=u["role"], name=u["name"],
+                   must_change=bool(u.get("must_change")))
+    return jsonify({"role": u["role"], "name": u["name"], "must_change": bool(u.get("must_change"))})
 
 
 @app.route("/api/logout", methods=["POST"])
@@ -150,7 +196,8 @@ def logout():
 def me():
     if "role" not in session:
         return err("login required", 401)
-    return jsonify({"username": session["username"], "role": session["role"], "name": session["name"]})
+    return jsonify({"username": session["username"], "role": session["role"], "name": session["name"],
+                    "must_change": bool(session.get("must_change"))})
 
 
 @app.route("/api/password", methods=["POST"])
@@ -162,9 +209,12 @@ def change_password():
         u = find_user(d, session["username"])
         if not check_password_hash(u["password"], str(b.get("old", ""))):
             return err("Old password is wrong")
-        if len(str(b.get("new", ""))) < 4:
-            return err("New password must be at least 4 characters")
-        u["password"] = generate_password_hash(str(b["new"]))
+        new = str(b.get("new", ""))
+        if len(new) < 8 or new.lower() == u["username"].lower() or check_password_hash(u["password"], new):
+            return err("New password: at least 8 characters, different from the old one and from your username")
+        u["password"] = generate_password_hash(new)
+        u.pop("must_change", None)
+        session["must_change"] = False
         save(d)
     return jsonify({"ok": True})
 
@@ -345,6 +395,126 @@ def admin_merit():
     return jsonify({**analyse(items), "missing": missing, "field": field, "limit": None})
 
 
+RESET_GAP = {}  # username -> time of the last forgot-password request
+
+
+def _rate_locked(key):
+    return int(FAILS.get(key, [0, 0])[1] - time.time())
+
+
+def _rate_fail(key):
+    rec = FAILS.get(key, [0, 0])
+    if len(FAILS) > 5000:
+        FAILS.clear()
+    rec[0] += 1
+    FAILS[key] = [0, time.time() + LOCK_SECS] if rec[0] >= MAX_TRIES else rec
+
+
+def _new_recovery(u):
+    code = "-".join(secrets.token_hex(2).upper() for _ in range(4))
+    u["recovery_hash"] = generate_password_hash(code)
+    return code
+
+
+@app.route("/api/forgot", methods=["POST"])
+def forgot():
+    name = str((request.get_json() or {}).get("username", "")).strip()
+    key = name.lower()
+    generic = jsonify({"ok": True, "message": "If this account exists, your request was sent to the admin. Ask the admin for your temporary password."})
+    if not key or len(key) > 40 or time.time() - RESET_GAP.get(key, 0) < 60:
+        return generic
+    with lock:
+        d = load()
+        u = find_user(d, name)
+        reqs = d.setdefault("reset_requests", [])
+        if u and u["role"] in ("student", "teacher") and len(reqs) < 200 \
+                and not any(r["username"].lower() == key for r in reqs):
+            reqs.append({"username": u["username"], "name": u["name"], "role": u["role"],
+                         "time": datetime.now().strftime("%Y-%m-%d %H:%M")})
+            save(d)
+    if len(RESET_GAP) > 5000:
+        RESET_GAP.clear()
+    RESET_GAP[key] = time.time()
+    return generic
+
+
+@app.route("/api/admin/requests")
+@need("admin")
+def admin_requests():
+    return jsonify(load().get("reset_requests", []))
+
+
+@app.route("/api/admin/requests/approve", methods=["POST"])
+@need("admin")
+def admin_approve():
+    name = str((request.get_json() or {}).get("username", ""))
+    with lock:
+        d = load()
+        u = find_user(d, name)
+        if not u or u["role"] == "admin":
+            return err("User not found")
+        temp = secrets.token_urlsafe(8)
+        u["password"] = generate_password_hash(temp)
+        u["must_change"] = True
+        d["reset_requests"] = [r for r in d.get("reset_requests", []) if r["username"].lower() != u["username"].lower()]
+        save(d)
+    FAILS.pop(u["username"].lower(), None)
+    return jsonify({"username": u["username"], "temp_password": temp})
+
+
+@app.route("/api/admin/requests/dismiss", methods=["POST"])
+@need("admin")
+def admin_dismiss():
+    name = str((request.get_json() or {}).get("username", "")).lower()
+    with lock:
+        d = load()
+        d["reset_requests"] = [r for r in d.get("reset_requests", []) if r["username"].lower() != name]
+        save(d)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/recovery-code", methods=["POST"])
+@need("admin")
+def admin_recovery_code():
+    b = request.get_json() or {}
+    with lock:
+        d = load()
+        u = find_user(d, session["username"])
+        if not check_password_hash(u["password"], str(b.get("password", ""))):
+            return err("Your password is wrong")
+        code = _new_recovery(u)
+        save(d)
+    return jsonify({"code": code})
+
+
+@app.route("/api/forgot-admin", methods=["POST"])
+def forgot_admin():
+    b = request.get_json() or {}
+    name = str(b.get("username", "")).strip().lower()
+    key = "rec:" + name
+    wait = _rate_locked(key)
+    if wait > 0:
+        return err(f"Too many wrong attempts. Try again in {wait // 60 + 1} minute(s).", 429)
+    code = str(b.get("code", "")).strip().upper()
+    new = str(b.get("new", ""))
+    with lock:
+        d = load()
+        u = find_user(d, name)
+        if not u or u["role"] != "admin" or not u.get("recovery_hash") \
+                or not check_password_hash(u["recovery_hash"], code):
+            _rate_fail(key)
+            return err("Username or recovery code is wrong", 401)
+        if len(new) < 8 or new.lower() == u["username"].lower():
+            return err("New password: at least 8 characters and different from your username")
+        u["password"] = generate_password_hash(new)
+        u.pop("must_change", None)
+        next_code = _new_recovery(u)
+        save(d)
+    FAILS.pop(name, None)
+    FAILS.pop(key, None)
+    return jsonify({"ok": True, "new_code": next_code})
+
+
 @app.route("/api/admin/data")
 @need("admin")
 def admin_data():
@@ -368,11 +538,13 @@ def add_student(d, roll, name, klass):
     roll, name, klass = roll.strip().upper(), name.strip(), klass.strip().upper()
     if not roll or not name or not klass:
         return "Roll no, name and class are required"
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{3,30}", roll) or not re.fullmatch(r"[A-Za-z0-9_. -]{1,30}", klass):
+        return "Roll no " + roll + ": 3-30 letters/numbers only. Class: letters, numbers, spaces, dots, dashes only"
     if find_user(d, roll):
         return "Roll no " + roll + " already exists"
     d["students"].append({"roll": roll, "name": name, "klass": klass})
     d["users"].append({"username": roll, "role": "student", "name": name,
-                       "password": generate_password_hash(roll)})
+                       "password": generate_password_hash(roll), "must_change": True})
     return None
 
 
@@ -435,7 +607,7 @@ def admin_add_teacher():
         if find_user(d, user):
             return err("Username already exists")
         d["users"].append({"username": user, "role": "teacher", "name": name,
-                           "password": generate_password_hash(str(b.get("password") or user))})
+                           "password": generate_password_hash(str(b.get("password") or user)), "must_change": True})
         save(d)
     return jsonify({"ok": True})
 
@@ -460,6 +632,8 @@ def admin_add_subject():
     klass, teacher = str(b.get("klass", "")).strip().upper(), str(b.get("teacher", "")).strip()
     if not (code and name and klass and teacher):
         return err("Code, name, class and teacher are required")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{2,20}", code) or not re.fullmatch(r"[A-Za-z0-9_. -]{1,30}", klass):
+        return err("Code: 2-20 letters/numbers. Class: letters, numbers, spaces, dots, dashes only")
     with lock:
         d = load()
         if any(s["code"] == code for s in d["subjects"]):
@@ -493,6 +667,7 @@ def admin_reset():
         if not u or u["role"] == "admin":
             return err("User not found")
         u["password"] = generate_password_hash(u["username"])
+        u["must_change"] = True
         save(d)
     return jsonify({"ok": True})
 
@@ -501,4 +676,4 @@ if __name__ == "__main__":
     # open the browser only once (not again after auto-reload)
     if os.environ.get("WERKZEUG_RUN_MAIN") != "true":
         threading.Timer(1.2, lambda: webbrowser.open("http://127.0.0.1:5000")).start()
-    app.run(debug=True, port=5000)
+    app.run(debug=True, host="127.0.0.1", port=5000)

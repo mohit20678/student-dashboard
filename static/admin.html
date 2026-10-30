@@ -30,6 +30,7 @@
       <button onclick="tab('te', this)">📚 Teachers</button>
       <button onclick="tab('su', this)">📖 Subjects</button>
       <button onclick="tab('me', this); meOpen()">🏆 Merit List</button>
+      <button id="rqTab" onclick="tab('rq', this); rqLoad()">🔑 Reset</button>
       <button onclick="tab('pw', this)">🔒 Password</button>
     </div>
 
@@ -159,6 +160,21 @@
       <div id="meBox"></div>
     </section>
 
+    <!-- ================= RESET ================= -->
+    <section id="rq" class="box hide">
+      <h3>Password Reset Requests</h3>
+      <div class="note">Students and teachers who clicked "Forgot password?" appear here. Give a temporary password and tell it to them in person. They must choose their own at login.</div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Requested</th><th></th></tr></thead>
+        <tbody id="rqBody"></tbody>
+      </table></div>
+      <div id="rqResult"></div>
+      <div class="sep">&gt; ADMIN RECOVERY CODE</div>
+      <div class="note">If you forget your own password, this code resets it from the login page (Admin tab, Forgot password). Each code works once. Keep it private and away from this computer, for example in a password manager.</div>
+      <div class="pw-row"><input id="rcPass" type="password" placeholder="Your current password"><button class="btn" onclick="makeRecovery()">GENERATE NEW CODE</button></div>
+      <div id="rcResult"></div>
+    </section>
+
     <!-- ================= PASSWORD ================= -->
     <section id="pw" class="box hide">
       <h3>Change Admin Password</h3>
@@ -211,7 +227,7 @@
     }
 
     function tab(id, btn) {
-      ["ov", "st", "te", "su", "me", "pw"].forEach(x => document.getElementById(x).classList.toggle("hide", x !== id));
+      ["ov", "st", "te", "su", "me", "rq", "pw"].forEach(x => document.getElementById(x).classList.toggle("hide", x !== id));
       document.querySelectorAll(".tabs button").forEach(b => b.classList.remove("on"));
       btn.classList.add("on");
     }
@@ -407,6 +423,53 @@
       try { box.innerHTML = analysisHTML(await api(url)); }
       catch (e) { toast(e.message.toUpperCase(), false); }
     }
+
+    async function rqLoad(quiet) {
+      try {
+        const rows = await api("/api/admin/requests");
+        document.getElementById("rqBody").innerHTML = rows.length
+          ? rows.map(r => `<tr><td>${esc(r.username)}</td><td>${esc(r.name)}</td><td>${esc(r.role)}</td><td>${esc(r.time)}</td>
+              <td><div class="actions">
+                <button class="btn small" data-rq="approve" data-id="${q(r.username)}">GIVE TEMP PASSWORD</button>
+                <button class="btn small del" data-rq="dismiss" data-id="${q(r.username)}">DISMISS</button>
+              </div></td></tr>`).join("")
+          : '<tr><td colspan="5" style="color:var(--muted)">No requests.</td></tr>';
+        document.getElementById("rqTab").textContent = "🔑 Reset" + (rows.length ? " (" + rows.length + ")" : "");
+      } catch (e) { if (!quiet) toast(e.message.toUpperCase(), false); }
+    }
+
+    function showBox(id, line, secret, tail) {
+      document.getElementById(id).innerHTML =
+        '<div class="result"><div>' + line + '</div><div style="font-family:var(--pixel);font-size:15px;color:var(--yellow);margin:10px 0">' +
+        esc(secret) + '</div><div class="note">' + tail + '</div></div>';
+    }
+
+    async function makeRecovery() {
+      try {
+        const r = await api("/api/admin/recovery-code", "POST", { password: document.getElementById("rcPass").value });
+        document.getElementById("rcPass").value = "";
+        showBox("rcResult", "Your recovery code (shown only now). Write it down and keep it safe:", r.code,
+          "Any older code stops working. Use it on the login page: Admin tab, Forgot password.");
+      } catch (e) { toast(e.message.toUpperCase(), false); }
+    }
+
+    document.addEventListener("click", async e => {
+      const b = e.target.closest("[data-rq]");
+      if (!b) return;
+      const user = b.dataset.id;
+      try {
+        if (b.dataset.rq === "approve") {
+          if (!confirm("Give " + user + " a temporary password?")) return;
+          const r = await api("/api/admin/requests/approve", "POST", { username: user });
+          showBox("rqResult", "Temporary password for <b>" + esc(r.username) + "</b>:", r.temp_password,
+            "Tell it to them in person. It is shown only now, and they must choose their own password at login.");
+        } else {
+          await api("/api/admin/requests/dismiss", "POST", { username: user });
+        }
+        rqLoad();
+      } catch (err) { toast(err.message.toUpperCase(), false); }
+    });
+    setTimeout(() => rqLoad(true), 1200);
 
     async function changePw() {
       try {
